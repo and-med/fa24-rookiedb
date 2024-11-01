@@ -17,6 +17,9 @@ target/*
 *.iws
 .attach_*
 
+# Ignore vscode files
+.vscode
+
 # Ignore all OSX hidden files
 *.DS_Store
 /bin/

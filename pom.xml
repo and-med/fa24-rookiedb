@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>edu.berkeley.cs186</groupId>
     <artifactId>database</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0</version>
 
     <dependencies>
         <dependency>
@@ -46,6 +46,20 @@
                     <trimStackTrace>false</trimStackTrace>
                     <argLine> -Xms32m -Xmx32m </argLine> <!--ADD TEST JVM ARGS HERE i.e '-Xms8m -Xmx8m' to limit memory to 8m -->
                     <groups>edu.berkeley.cs186.database.categories.Proj${proj}Tests</groups>
+                </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <configuration>
+                    <archive>
+                    <manifest>
+                        <mainClass>edu.berkeley.cs186.database.cli.CommandLineInterface</mainClass>
+                    </manifest>
+                    </archive>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <appendAssemblyId>false</appendAssemblyId>
                 </configuration>
             </plugin>
         </plugins>
