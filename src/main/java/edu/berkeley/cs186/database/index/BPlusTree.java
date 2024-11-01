@@ -199,9 +199,7 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(root);
     }
 
     /**
@@ -232,9 +230,7 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(root, key);
     }
 
     /**
@@ -432,20 +428,66 @@ public class BPlusTree {
 
     // Iterator ////////////////////////////////////////////////////////////////
     private class BPlusTreeIterator implements Iterator<RecordId> {
-        // TODO(proj2): Add whatever fields and constructors you want here.
+        private LeafNode currentPage;
+        private Iterator<RecordId> currentPageIterator;
+
+        public BPlusTreeIterator(BPlusNode root) {
+            this.currentPage = root.getLeftmostLeaf();
+            this.currentPageIterator = this.currentPage.scanAll();
+        }
+
+        public BPlusTreeIterator(BPlusNode root, DataBox startKey) {
+            this.currentPage = root.get(startKey);
+            this.currentPageIterator = this.currentPage.scanGreaterEqual(startKey);
+        }
 
         @Override
         public boolean hasNext() {
-            // TODO(proj2): implement
+            if (currentPageIterator.hasNext()) {
+                return true;
+            }
 
-            return false;
+            return moveNext();
         }
 
         @Override
         public RecordId next() {
-            // TODO(proj2): implement
+            if (this.currentPageIterator.hasNext()) {
+                return this.currentPageIterator.next();
+            }
 
-            throw new NoSuchElementException();
+            // somebody called this method without verifying hasNext() first
+            // we need to deal with this anyhow
+            if (moveNext()) {
+                return this.currentPageIterator.next();
+            }
+
+            throw new NoSuchElementException("the btree is empty!");
+        }
+
+        private boolean moveNext() {
+            // since the tree is not rebalanced after removals
+            // and the invariant on number of keys is not maintained
+            // as far as we're concerned we can have a chain of empty pages;
+            // so we need to find the next page that has some records
+            Optional<LeafNode> nextPage = currentPage.getRightSibling();
+
+            while (nextPage.isPresent()) {
+                Iterator<RecordId> nextPageIterator = nextPage.get().scanAll();
+
+                if (nextPageIterator.hasNext()) {
+                    // found the next non-empty page, set the current page iterator to this iterator
+                    this.currentPage = nextPage.get();
+                    this.currentPageIterator = nextPageIterator;
+                    return true;
+                }
+
+                // try next page, this page is empty
+                nextPage = nextPage.get().getRightSibling();
+            }
+
+            // no new records found
+            return false;
         }
     }
 }
