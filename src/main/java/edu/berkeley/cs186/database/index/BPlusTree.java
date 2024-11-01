@@ -145,9 +145,7 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): implement
-
-        return Optional.empty();
+        return this.root.get(key).getKey(key);
     }
 
     /**
@@ -253,10 +251,22 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): implement
-        // Note: You should NOT update the root variable directly.
-        // Use the provided updateRoot() helper method to change
-        // the tree's root if the old root splits.
+        Optional<Pair<DataBox, Long>> overflowedNode = this.root.put(key, rid);
+
+        if (overflowedNode.isPresent()) {
+            List<DataBox> keys = new ArrayList<>(1);
+            List<Long> children = new ArrayList<>(2);
+
+            keys.add(overflowedNode.get().getFirst());
+            children.add(this.root.getPage().getPageNum());
+            children.add(overflowedNode.get().getSecond());
+
+            // Create a new root with a single key returned from the split
+            // and two children: the previous root, and the new page created from split
+            BPlusNode newRoot = new InnerNode(metadata, bufferManager, keys, children, lockContext);
+
+            this.updateRoot(newRoot);
+        }
 
         return;
     }
@@ -308,7 +318,7 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): implement
+        this.root.remove(key);
 
         return;
     }

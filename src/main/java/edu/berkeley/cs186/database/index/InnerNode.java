@@ -2,6 +2,7 @@ package edu.berkeley.cs186.database.index;
 
 import edu.berkeley.cs186.database.common.Buffer;
 import edu.berkeley.cs186.database.common.Pair;
+import edu.berkeley.cs186.database.common.iterator.ArrayBacktrackingIterator;
 import edu.berkeley.cs186.database.concurrency.LockContext;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.databox.Type;
@@ -80,26 +81,93 @@ class InnerNode extends BPlusNode {
     // See BPlusNode.get.
     @Override
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
+        int childNum = InnerNode.numLessThanEqual(key, this.keys);
+        long pageNum = this.children.get(childNum);
 
-        return null;
+        return BPlusNode
+            .fromBytes(metadata, bufferManager, treeContext, pageNum)
+            .get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
-        // TODO(proj2): implement
+        long pageNum = this.children.get(0);
 
-        return null;
+        return BPlusNode
+            .fromBytes(metadata, bufferManager, treeContext, pageNum)
+            .getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        int childIdx = InnerNode.numLessThanEqual(key, this.keys);
 
-        return Optional.empty();
+        Optional<Pair<DataBox, Long>> overflowedNode = this.getChild(childIdx).put(key, rid);
+        
+        Optional<Pair<DataBox, Long>> response = Optional.empty();
+
+        if (overflowedNode.isPresent()) {
+            // the key returned from the child should be always strictly greater
+            // than the current key
+            //                          inner
+            //                          +--+--+--+--+
+            //                          | 3|10|20|  |
+            //                          +--+--+--+--+
+            //                         /   |  |   \
+            //                 _______/    |  |    \_________
+            //                /            |   \             \
+            //   +--+--+--+--+  +--+--+--+--+  +--+--+--+--+  +--+--+--+--+
+            //   | 1| 2|  |  |->| 3| 4| 5| 6|->|11|12|13|14|->|21|22|23|  |
+            //   +--+--+--+--+  +--+--+--+--+  +--+--+--+--+  +--+--+--+--+
+            //   leaf0          leaf3          leaf1          leaf2
+            //
+            // inner.keys = { 3, 10, 20 }
+            // inner.children = { leaf0, leaf3, leaf1, leaf2 }
+            //
+            // let's analyze two examples
+            // 1) inserting 10
+            // childIdx == 2 (number of keys less than or equal to 10)
+            // inner.keys = { 3, 10, 12, 20 } (indexOf(12) == 2 == childIdx)
+            // inner.children = { leaf0, leaf3, leaf1, leaf4, leaf2 } (indexOf(leaf4) == 3 == childIdx + 1)
+            // 2) inserting 7
+            // childIdx == 1 (number of keys less than or equal to 7)
+            // inner.keys = { 3, 5, 10, 20 } (indexOf(5) == 1 == childIdx)
+            // inner.children = { leaf0, leaf3, leaf4, leaf1, leaf2 } (indexOf(leaf4) == 2 == childIdx + 1)
+            this.keys.add(childIdx, overflowedNode.get().getFirst());
+            this.children.add(childIdx + 1, overflowedNode.get().getSecond());
+
+            // check that we don't have more than 2d keys
+            if (this.keys.size() > 2 * this.metadata.getOrder()) {
+                // need to split this node into two nodes
+                List<DataBox> rightNodeKeys = this.keys.subList(this.metadata.getOrder() + 1, this.keys.size());
+                List<Long> rightNodeChildren = this.children.subList(this.metadata.getOrder() + 1, this.children.size());
+
+                // Make a copy of keys and children for the right node
+                InnerNode rightNode = new InnerNode(
+                    metadata, 
+                    bufferManager, 
+                    new ArrayList<>(rightNodeKeys), 
+                    new ArrayList<>(rightNodeChildren), 
+                    treeContext
+                );
+                
+                // remove the new node keys and children from this node
+                rightNodeKeys.clear();
+                rightNodeChildren.clear();
+
+                // Remove the split key and return it
+                DataBox splitKey = this.keys.remove(this.keys.size() - 1);
+
+                response = Optional.of(new Pair<DataBox, Long>(splitKey, rightNode.getPage().getPageNum()));
+            }
+        }
+
+        this.sync();
+
+        return response;
     }
 
     // See BPlusNode.bulkLoad.
@@ -114,7 +182,9 @@ class InnerNode extends BPlusNode {
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
+        int childIdx = InnerNode.numLessThanEqual(key, this.keys);
+
+        this.getChild(childIdx).remove(key);
 
         return;
     }

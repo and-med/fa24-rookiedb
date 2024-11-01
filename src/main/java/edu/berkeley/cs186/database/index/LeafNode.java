@@ -146,25 +146,61 @@ class LeafNode extends BPlusNode {
     // See BPlusNode.get.
     @Override
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        int childIdx = InnerNode.numLessThan(key, this.keys);
 
-        return Optional.empty();
+        if (childIdx < this.keys.size() && this.keys.get(childIdx).compareTo(key) == 0) {
+            throw new BPlusTreeException(String.format("attempt to insert duplicate key: %s", key.toString()));
+        }
+
+        this.keys.add(childIdx, key);
+        this.rids.add(childIdx, rid);
+
+        Optional<Pair<DataBox, Long>> response = Optional.empty();
+
+        // check that we don't have more than 2d keys
+        if (this.keys.size() > 2 * this.metadata.getOrder()) {
+            // need to split this node into two
+
+            List<DataBox> rightNodeKeys = this.keys.subList(this.metadata.getOrder(), this.keys.size());
+            List<RecordId> rightNodeRids = this.rids.subList(this.metadata.getOrder(), this.rids.size());
+
+            LeafNode rightNode = new LeafNode(
+                metadata, 
+                bufferManager, 
+                new ArrayList<>(rightNodeKeys), 
+                new ArrayList<>(rightNodeRids), 
+                rightSibling, 
+                treeContext
+            );
+
+            // set the right sibling of this node to the newly created node
+            this.rightSibling = Optional.of(rightNode.getPage().getPageNum());
+
+            // remove the new node keys and rids from this node
+            rightNodeKeys.clear();
+            rightNodeRids.clear();
+
+            // get the split key WITHOUT removing it
+            DataBox splitKey = rightNode.keys.get(0);
+
+            response = Optional.of(new Pair<DataBox, Long>(splitKey, rightNode.getPage().getPageNum()));
+        }
+
+        this.sync();
+        
+        return response;
     }
 
     // See BPlusNode.bulkLoad.
@@ -179,7 +215,14 @@ class LeafNode extends BPlusNode {
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
+        int childIdx = InnerNode.numLessThan(key, this.keys);
+
+        if (childIdx < this.keys.size() && this.keys.get(childIdx).compareTo(key) == 0) {
+            this.keys.remove(childIdx);
+            this.rids.remove(childIdx);
+
+            this.sync();
+        }
 
         return;
     }
