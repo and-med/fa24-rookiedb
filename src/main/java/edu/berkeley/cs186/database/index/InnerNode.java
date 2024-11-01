@@ -2,7 +2,6 @@ package edu.berkeley.cs186.database.index;
 
 import edu.berkeley.cs186.database.common.Buffer;
 import edu.berkeley.cs186.database.common.Pair;
-import edu.berkeley.cs186.database.common.iterator.ArrayBacktrackingIterator;
 import edu.berkeley.cs186.database.concurrency.LockContext;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.databox.Type;
@@ -94,52 +93,120 @@ class InnerNode extends BPlusNode {
         return this.getChild(0).getLeftmostLeaf();
     }
 
-    // See BPlusNode.put.
+
+    /**
+     * Inserts the pair (k, r) into the subtree
+     * 
+     * example:
+     *                          inner
+     *                          +--+--+--+--+
+     *                          | 3|10|20|  |
+     *                          +--+--+--+--+
+     *                         /   |  |   \
+     *                 _______/    |  |    \_________
+     *                /            |   \             \
+     *   +--+--+--+--+  +--+--+--+--+  +--+--+--+--+  +--+--+--+--+
+     *   | 1| 2|  |  |->| 3| 4| 5| 6|->|11|12|13|14|->|21|22|23|  |
+     *   +--+--+--+--+  +--+--+--+--+  +--+--+--+--+  +--+--+--+--+
+     *   leaf0          leaf3          leaf1          leaf2
+     *
+     * inner.keys = { 3, 10, 20 }
+     * inner.children = { leaf0, leaf3, leaf1, leaf2 }
+     *
+     * 1) inserting 10
+     * childIdx == 2 (number of keys less than or equal to 10)
+     * inner.keys = { 3, 10, 12, 20 } (indexOf(12) == 2 == childIdx)
+     * inner.children = { leaf0, leaf3, leaf1, leaf4, leaf2 } (indexOf(leaf4) == 3 == childIdx + 1)
+     * 2) inserting 7
+     * childIdx == 1 (number of keys less than or equal to 7)
+     * inner.keys = { 3, 5, 10, 20 } (indexOf(5) == 1 == childIdx)
+     * inner.children = { leaf0, leaf3, leaf4, leaf1, leaf2 } (indexOf(leaf4) == 2 == childIdx + 1)
+     */
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         int childIdx = InnerNode.numLessThanEqual(key, this.keys);
 
-        Optional<Pair<DataBox, Long>> overflowedNode = this.getChild(childIdx).put(key, rid);
+        Optional<Pair<DataBox, Long>> newKeyAndChild = this.getChild(childIdx).put(key, rid);
         
-        if (!overflowedNode.isPresent()) {
+        if (!newKeyAndChild.isPresent()) {
             // Note: no need to sync() here as the page didn't change
             return Optional.empty();
         }
 
-        // need to insert the key to the inner node;
-        // the key returned from the child should be always strictly greater
-        // than the current key
-        //                          inner
-        //                          +--+--+--+--+
-        //                          | 3|10|20|  |
-        //                          +--+--+--+--+
-        //                         /   |  |   \
-        //                 _______/    |  |    \_________
-        //                /            |   \             \
-        //   +--+--+--+--+  +--+--+--+--+  +--+--+--+--+  +--+--+--+--+
-        //   | 1| 2|  |  |->| 3| 4| 5| 6|->|11|12|13|14|->|21|22|23|  |
-        //   +--+--+--+--+  +--+--+--+--+  +--+--+--+--+  +--+--+--+--+
-        //   leaf0          leaf3          leaf1          leaf2
-        //
-        // inner.keys = { 3, 10, 20 }
-        // inner.children = { leaf0, leaf3, leaf1, leaf2 }
-        //
-        // let's analyze two examples
-        // 1) inserting 10
-        // childIdx == 2 (number of keys less than or equal to 10)
-        // inner.keys = { 3, 10, 12, 20 } (indexOf(12) == 2 == childIdx)
-        // inner.children = { leaf0, leaf3, leaf1, leaf4, leaf2 } (indexOf(leaf4) == 3 == childIdx + 1)
-        // 2) inserting 7
-        // childIdx == 1 (number of keys less than or equal to 7)
-        // inner.keys = { 3, 5, 10, 20 } (indexOf(5) == 1 == childIdx)
-        // inner.children = { leaf0, leaf3, leaf4, leaf1, leaf2 } (indexOf(leaf4) == 2 == childIdx + 1)
+        // The key returned is always greater less than the element at childIdx
+        // and greater than the element at childIdx + 1 (see example above)
+        this.keys.add(childIdx, newKeyAndChild.get().getFirst());
+        this.children.add(childIdx + 1, newKeyAndChild.get().getSecond());
 
-        this.keys.add(childIdx, overflowedNode.get().getFirst());
-        this.children.add(childIdx + 1, overflowedNode.get().getSecond());
+        newKeyAndChild = this.splitIfNecessary();
 
-        if (this.keys.size() <= 2 * this.metadata.getOrder()) {
-            // we're fine here, don't forget to sync()
+        this.sync();
+        return newKeyAndChild;
+    }
+
+    // See BPlusNode.bulkLoad.
+    @Override
+    public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
+            float fillFactor) {
+        while (data.hasNext()) {
+            // bulk load to the last child always
+            BPlusNode lastChild = this.getChild(this.children.size() - 1);
+            Optional<Pair<DataBox, Long>> newKeyAndChild = lastChild.bulkLoad(data, fillFactor);
+
+            if (!newKeyAndChild.isPresent()) {
+                // continue bulk loading, no ned to sync() until the loop is over (I guess?)
+                continue;
+            }
+
+            this.keys.add(newKeyAndChild.get().getFirst());
+            this.children.add(newKeyAndChild.get().getSecond());
+
+            newKeyAndChild = this.splitIfNecessary();
+
+            if (!newKeyAndChild.isPresent()) {
+                // continue bulk loading, no ned to sync() until the loop is over (I guess?)
+                continue;
+            }
+
             this.sync();
+            return newKeyAndChild;
+        }
+
+        this.sync();
+        return Optional.empty();
+    }
+
+    // See BPlusNode.remove.
+    @Override
+    public void remove(DataBox key) {
+        int childIdx = InnerNode.numLessThanEqual(key, this.keys);
+
+        this.getChild(childIdx).remove(key);
+
+        return;
+    }
+
+    // Helpers /////////////////////////////////////////////////////////////////
+    @Override
+    public Page getPage() {
+        return page;
+    }
+
+    /**
+     * Verifies that the invariant k <= 2*d holds,
+     * where k - number of keys, d - the order of the tree
+     * 
+     * if the invariant doesn't hold: a) splits the keys and children arrays into two;
+     * b) removes the second half from the current node and moves it into the new node;
+     * c) moves up (NOT copies) the split key to the upper node;
+     * 
+     * split key is chosen from the middle such that:
+     * - all keys in leftNode are strictly less than the split key
+     * - and all keys in right node are strictly greater or equal than the split key
+     */
+    private Optional<Pair<DataBox, Long>> splitIfNecessary() {
+        if (this.keys.size() <= 2 * this.metadata.getOrder()) {
+            // we're fine here
             return Optional.empty();
         }
 
@@ -164,34 +231,7 @@ class InnerNode extends BPlusNode {
         // Remove the split key and return it
         DataBox splitKey = this.keys.remove(this.keys.size() - 1);
 
-        this.sync();
-
         return Optional.of(new Pair<DataBox, Long>(splitKey, rightNode.getPage().getPageNum()));
-    }
-
-    // See BPlusNode.bulkLoad.
-    @Override
-    public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
-            float fillFactor) {
-        // TODO(proj2): implement
-
-        return Optional.empty();
-    }
-
-    // See BPlusNode.remove.
-    @Override
-    public void remove(DataBox key) {
-        int childIdx = InnerNode.numLessThanEqual(key, this.keys);
-
-        this.getChild(childIdx).remove(key);
-
-        return;
-    }
-
-    // Helpers /////////////////////////////////////////////////////////////////
-    @Override
-    public Page getPage() {
-        return page;
     }
 
     private BPlusNode getChild(int i) {

@@ -247,24 +247,9 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        Optional<Pair<DataBox, Long>> overflowedNode = this.root.put(key, rid);
+        Optional<Pair<DataBox, Long>> newKeyAndChild = this.root.put(key, rid);
 
-        if (overflowedNode.isPresent()) {
-            List<DataBox> keys = new ArrayList<>(1);
-            List<Long> children = new ArrayList<>(2);
-
-            keys.add(overflowedNode.get().getFirst());
-            children.add(this.root.getPage().getPageNum());
-            children.add(overflowedNode.get().getSecond());
-
-            // Create a new root with a single key returned from the split
-            // and two children: the previous root, and the new page created from split
-            BPlusNode newRoot = new InnerNode(metadata, bufferManager, keys, children, lockContext);
-
-            this.updateRoot(newRoot);
-        }
-
-        return;
+        this.splitRootIfNecessary(newKeyAndChild);
     }
 
     /**
@@ -290,12 +275,13 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): implement
-        // Note: You should NOT update the root variable directly.
-        // Use the provided updateRoot() helper method to change
-        // the tree's root if the old root splits.
+        this.validateTreeIsEmptyForBulkLoad();
 
-        return;
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> newKeyAndChild = this.root.bulkLoad(data, fillFactor);
+
+            this.splitRootIfNecessary(newKeyAndChild);
+        }
     }
 
     /**
@@ -405,6 +391,34 @@ public class BPlusTree {
     }
 
     /**
+     * Updates the root if put() or bulkLoad() operation
+     * resulted in root node being splitted into two nodes
+     * 
+     * The new root will contain two children: the current root,
+     * and the new node that was allocated as a result of split.
+     * The new root will also contain a single key, the key that was
+     * bubbled up as a result of split.
+     */
+    private void splitRootIfNecessary(Optional<Pair<DataBox, Long>> newKeyAndChild) {
+        if (!newKeyAndChild.isPresent()) {
+            return;
+        }
+
+        List<DataBox> keys = new ArrayList<>(1);
+        List<Long> children = new ArrayList<>(2);
+
+        keys.add(newKeyAndChild.get().getFirst());
+        children.add(this.root.getPage().getPageNum());
+        children.add(newKeyAndChild.get().getSecond());
+
+        // Create a new root with a single key returned from the split
+        // and two children: the previous root, and the new page created from split
+        BPlusNode newRoot = new InnerNode(metadata, bufferManager, keys, children, lockContext);
+
+        this.updateRoot(newRoot);
+    }
+
+    /**
      * Save the new root page number and update the tree's metadata.
      **/
     private void updateRoot(BPlusNode newRoot) {
@@ -416,6 +430,26 @@ public class BPlusTree {
         if (transaction != null) {
             transaction.updateIndexMetadata(metadata);
         }
+    }
+
+    /**
+     * Validates that the tree is empty the way it's created in constructor,
+     * meaning root is a LeafNode with no keys and no right sibling
+     * 
+     * Note: code like this.scanAll().hasNext() is much more elegant,
+     * however it is not correct since it doesn't guard against empty nodes after removal
+     */
+    private void validateTreeIsEmptyForBulkLoad() {
+        
+        if (this.root.getClass().equals(LeafNode.class)) {
+            LeafNode leafNode = (LeafNode)this.root;
+    
+            if (leafNode.getKeys().size() == 0 && !leafNode.getRightSibling().isPresent()) {
+                return;
+            }
+        }
+
+        throw new RuntimeException("attempting to bulk load to non-empty table, operation not supported");
     }
 
     private void typecheck(DataBox key) {

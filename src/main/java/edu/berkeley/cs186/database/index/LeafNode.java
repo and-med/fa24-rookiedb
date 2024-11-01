@@ -164,51 +164,54 @@ class LeafNode extends BPlusNode {
             throw new BPlusTreeException(String.format("attempt to insert duplicate key: %s", key.toString()));
         }
 
+        // Insert the key in the necessary position maintaining sorted order
         this.keys.add(childIdx, key);
         this.rids.add(childIdx, rid);
 
+        // n.put() needs to maintain invariant is k <= 2 * d, where
+        // k - number of keys
+        // d - the order of the tree
         if (this.keys.size() <= 2 * this.metadata.getOrder()) {
-            // we're fine here, don't forget to sync()
             this.sync();
             return Optional.empty();
         }
 
-        // there are more than 2d keys in this node
-        // need to split it into two nodes
-
-        List<DataBox> rightNodeKeys = this.keys.subList(this.metadata.getOrder(), this.keys.size());
-        List<RecordId> rightNodeRids = this.rids.subList(this.metadata.getOrder(), this.rids.size());
-
-        LeafNode rightNode = new LeafNode(
-            metadata, 
-            bufferManager, 
-            new ArrayList<>(rightNodeKeys), 
-            new ArrayList<>(rightNodeRids), 
-            rightSibling, 
-            treeContext
-        );
-
-        // set the right sibling of this node to the newly created node
-        this.rightSibling = Optional.of(rightNode.getPage().getPageNum());
-
-        // remove the new node keys and rids from this node
-        rightNodeKeys.clear();
-        rightNodeRids.clear();
-
-        // get the split key WITHOUT removing it
-        DataBox splitKey = rightNode.keys.get(0);
+        // need to split current node into two at the position d
+        Pair<DataBox, Long> newKeyAndPage = this.split(this.metadata.getOrder());
 
         this.sync();
-        
-        return Optional.of(new Pair<DataBox, Long>(splitKey, rightNode.getPage().getPageNum()));
+        return Optional.of(newKeyAndPage);
     }
 
     // See BPlusNode.bulkLoad.
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
-        // TODO(proj2): implement
+        while(data.hasNext()) {
+            Pair<DataBox, RecordId> next = data.next();
 
+            this.keys.add(next.getFirst());
+            this.rids.add(next.getSecond());
+
+            // n.bulkLoad() needs to maintain invariant: 
+            // k <= Math.ceil(fillFactor * 2 * d), where
+            // k - number of keys
+            // d - the order of the tree
+            int maxAllowedKeys = (int)Math.ceil(fillFactor * 2 * this.metadata.getOrder());
+
+            if (this.keys.size() <= maxAllowedKeys) {
+                // continue loading, no ned to sync() until the loop is over (I guess?)
+                continue;
+            }
+
+            // invariant doesn't hold, need to move keys that are overflowing to the next page
+            Pair<DataBox, Long> newKeyAndChild = this.split(maxAllowedKeys);
+
+            this.sync();
+            return Optional.of(newKeyAndChild);
+        }
+
+        this.sync();
         return Optional.empty();
     }
 
@@ -266,6 +269,41 @@ class LeafNode extends BPlusNode {
 
         long pageNum = rightSibling.get();
         return Optional.of(LeafNode.fromBytes(metadata, bufferManager, treeContext, pageNum));
+    }
+
+    /**
+     * Splits the current page into two based on splitIdx, such that:
+     * a) current (left) node keys are [0, splitIdx)
+     * b) new (right) node keys are [splitIdx, k)
+     * 
+     * where k - number of keys
+     * 
+     * split key is the element at the position splitIdx
+     */
+    private Pair<DataBox, Long> split(int splitIdx) {
+        List<DataBox> rightNodeKeys = this.keys.subList(splitIdx, this.keys.size());
+        List<RecordId> rightNodeRids = this.rids.subList(splitIdx, this.rids.size());
+
+        LeafNode rightNode = new LeafNode(
+            metadata, 
+            bufferManager, 
+            new ArrayList<>(rightNodeKeys), 
+            new ArrayList<>(rightNodeRids), 
+            rightSibling, 
+            treeContext
+        );
+
+        // set the right sibling of this node to the newly created node
+        this.rightSibling = Optional.of(rightNode.getPage().getPageNum());
+
+        // remove the new node keys and recordIds from this node
+        rightNodeKeys.clear();
+        rightNodeRids.clear();
+
+        // get the split key WITHOUT removing it
+        DataBox splitKey = rightNode.keys.get(0);
+
+        return new Pair<DataBox, Long>(splitKey, rightNode.getPage().getPageNum());
     }
 
     /** Serializes this leaf to its page. */
