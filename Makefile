@@ -9,3 +9,6 @@ build-jar:
 
 run-jar:
 	java -jar target/database-1.0.jar
+
+test-proj-2-task-1:
+	mvn test -Dtest=edu.berkeley.cs186.database.index.TestLeafNode#testToAndFromBytes
