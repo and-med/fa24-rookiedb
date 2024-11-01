@@ -167,40 +167,40 @@ class LeafNode extends BPlusNode {
         this.keys.add(childIdx, key);
         this.rids.add(childIdx, rid);
 
-        Optional<Pair<DataBox, Long>> response = Optional.empty();
-
-        // check that we don't have more than 2d keys
-        if (this.keys.size() > 2 * this.metadata.getOrder()) {
-            // need to split this node into two
-
-            List<DataBox> rightNodeKeys = this.keys.subList(this.metadata.getOrder(), this.keys.size());
-            List<RecordId> rightNodeRids = this.rids.subList(this.metadata.getOrder(), this.rids.size());
-
-            LeafNode rightNode = new LeafNode(
-                metadata, 
-                bufferManager, 
-                new ArrayList<>(rightNodeKeys), 
-                new ArrayList<>(rightNodeRids), 
-                rightSibling, 
-                treeContext
-            );
-
-            // set the right sibling of this node to the newly created node
-            this.rightSibling = Optional.of(rightNode.getPage().getPageNum());
-
-            // remove the new node keys and rids from this node
-            rightNodeKeys.clear();
-            rightNodeRids.clear();
-
-            // get the split key WITHOUT removing it
-            DataBox splitKey = rightNode.keys.get(0);
-
-            response = Optional.of(new Pair<DataBox, Long>(splitKey, rightNode.getPage().getPageNum()));
+        if (this.keys.size() <= 2 * this.metadata.getOrder()) {
+            // we're fine here, don't forget to sync()
+            this.sync();
+            return Optional.empty();
         }
+
+        // there are more than 2d keys in this node
+        // need to split it into two nodes
+
+        List<DataBox> rightNodeKeys = this.keys.subList(this.metadata.getOrder(), this.keys.size());
+        List<RecordId> rightNodeRids = this.rids.subList(this.metadata.getOrder(), this.rids.size());
+
+        LeafNode rightNode = new LeafNode(
+            metadata, 
+            bufferManager, 
+            new ArrayList<>(rightNodeKeys), 
+            new ArrayList<>(rightNodeRids), 
+            rightSibling, 
+            treeContext
+        );
+
+        // set the right sibling of this node to the newly created node
+        this.rightSibling = Optional.of(rightNode.getPage().getPageNum());
+
+        // remove the new node keys and rids from this node
+        rightNodeKeys.clear();
+        rightNodeRids.clear();
+
+        // get the split key WITHOUT removing it
+        DataBox splitKey = rightNode.keys.get(0);
 
         this.sync();
         
-        return response;
+        return Optional.of(new Pair<DataBox, Long>(splitKey, rightNode.getPage().getPageNum()));
     }
 
     // See BPlusNode.bulkLoad.
